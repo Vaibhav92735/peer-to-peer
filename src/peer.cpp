@@ -24,7 +24,7 @@ const int no_of_threads = 3;
 std::queue<int> job_queue;
 std::mutex mtx;
 std::mutex peers_mutex; // Mutex for peers_connected
-std::string MY_IP = "127.0.0.1";
+const std::string MY_IP = "127.0.0.1";
 int PORT;
 std::unordered_set<std::string> seeds_addr;
 std::unordered_set<std::string> peer_set_from_seed;
@@ -292,12 +292,14 @@ void connect_peers(const std::vector<std::string> &complete_peer_list, const std
     }
 }
 
-// Function to join at most 4 peers
-void join_atmost_4_peers(const std::vector<std::string> &complete_peer_list)
+// Function to join k peers
+void join_atmost_k_peers(const std::vector<std::string> &complete_peer_list)
 {
     if (!complete_peer_list.empty())
     {
-        int limit = std::min(static_cast<int>(complete_peer_list.size()), 4);
+        // int tr = std::min(static_cast<int>(complete_peer_list.size()), 4);
+        int tr = static_cast<int>(complete_peer_list.size());
+        int limit = rand() % tr + 1;
         auto selected_peer_nodes_index = generate_k_random_numbers_in_range(0, complete_peer_list.size() - 1, limit);
         connect_peers(complete_peer_list, selected_peer_nodes_index);
     }
@@ -314,7 +316,7 @@ std::vector<std::string> union_peer_lists(const std::string &complete_peer_list)
         peers.push_back(temp.substr(0, pos));
         temp.erase(0, pos + 1);
     }
-    MY_IP = peers.back().substr(0, peers.back().find(':'));
+    // MY_IP = peers.back().substr(0, peers.back().find(':'));
     for (const auto &peer : peers)
     {
         if (!peer.empty())
@@ -364,7 +366,7 @@ void connect_seeds()
             std::cerr << "Seed Connection Error: " << strerror(errno) << "\n";
         }
     }
-    join_atmost_4_peers(std::vector<std::string>(peer_set_from_seed.begin(), peer_set_from_seed.end()));
+    join_atmost_k_peers(std::vector<std::string>(peer_set_from_seed.begin(), peer_set_from_seed.end()));
 }
 
 // Function to register with k seeds
