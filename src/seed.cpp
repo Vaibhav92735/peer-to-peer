@@ -1,111 +1,159 @@
 #include <iostream>
 #include <fstream>
+#include <string>
 #include <vector>
-#include <unordered_map>
 #include <thread>
 #include <mutex>
-#include <netinet/in.h>
+#include <cstring>
 #include <unistd.h>
-#include <sstream>
-#include <jsoncpp/json/json.h>  // Install: sudo apt install libjsoncpp-dev
+#include <arpa/inet.h>
+#include <bits/stdc++.h>
 
-#define DEFAULT_SEEDS 10
-#define BASE_PORT 5000
+using namespace std;
 
-std::unordered_map<std::string, int> peer_list;
-std::mutex pl_mutex;
+#define MY_IP "0.0.0.0"
+#define BUFFER_SIZE 1024
 
-void handle_peer(int client_socket) {
-    char buffer[1024] = {0};
-    read(client_socket, buffer, 1024);
-    std::string request(buffer);
-    std::istringstream ss(request);
-    std::string command, ip;
-    int port;
-    ss >> command >> ip >> port;
+std::vector<std::string> peer_list;
+std::mutex peer_list_mutex;
+int PORT;
 
-    std::lock_guard<std::mutex> lock(pl_mutex);
-
-    if (command == "REGISTER") {
-        peer_list[ip + ":" + std::to_string(port)] = port;
-        std::cout << "Registered Peer: " << ip << ":" << port << std::endl;
-        std::string response = "OK";
-        send(client_socket, response.c_str(), response.size(), 0);
-    } 
-    else if (command == "DEAD_NODE") {
-        peer_list.erase(ip + ":" + std::to_string(port));
-        std::cout << "Removed Dead Peer: " << ip << ":" << port << std::endl;
+// Write the outputs to the file
+void write_output_to_file(const std::string& output) {
+    std::ofstream file("outputseed.txt", std::ios::app);
+    if (file.is_open()) {
+        file << output << std::endl;
+        file.close();
+    } else {
+        std::cerr << "Write Failed" << std::endl;
     }
-    
-    close(client_socket);
 }
 
-void start_seed(int port) {
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
+// Convert list of connected peers to a comma-separated string
+std::string list_to_string(const std::vector<std::string>& peer_list) {
+    std::string peerListStr = ",";
+    for (const auto& peer : peer_list) {
+        peerListStr += peer + ",";
+    }
+    return peerListStr;
+}
 
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
+// Remove a dead node from the peer list
+void remove_dead_node(const std::string& message) {
+    // Log the received dead node message
+    std::cout << "Received Dead Node Message: " << message << std::endl;
+    write_output_to_file("Received Dead Node Message: " + message);
 
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        std::cerr << "Error binding to port " << port << std::endl;
+    // Extract the dead node's address from the message
+    size_t colon1 = message.find(':'); // First colon after "Dead Node"
+    size_t colon2 = message.find(':', colon1 + 1); // Second colon after IP
+    size_t colon3 = message.find(':', colon2 + 1); // Third colon after port
+
+    if (colon1 == std::string::npos || colon2 == std::string::npos || colon3 == std::string::npos) {
+        std::cerr << "Invalid dead node message format: " << message << std::endl;
         return;
     }
 
-    listen(server_fd, 5);
-    std::cout << "Seed Node listening on port " << port << std::endl;
+    // Extract IP and port (between the first and third colons)
+    std::string dead_node = message.substr(colon1 + 1, colon3 - (colon1 + 1));
+    std::cout << "Dead Node Identified: " << dead_node << std::endl;
+
+    // Lock the peer list to ensure thread safety
+    std::lock_guard<std::mutex> lock(peer_list_mutex);
+
+    // Find and remove the dead node from the peer list
+    auto it = std::find(peer_list.begin(), peer_list.end(), dead_node);
+    if (it != peer_list.end()) {
+        std::cout << "Removing Dead Node: " << *it << std::endl;
+        peer_list.erase(it);
+    } else {
+        std::cout << "Dead Node Not Found in Peer List: " << dead_node << std::endl;
+    }
+
+    // Log the updated peer list
+    std::cout << "Updated Peer List:" << std::endl;
+    for (const auto& peer : peer_list) {
+        std::cout << peer << std::endl;
+    }
+}
+
+// Handle communication with a peer
+void handle_peer(int conn, const std::string& addr) {
+    char buffer[BUFFER_SIZE];
+    while (true) {
+        memset(buffer, 0, BUFFER_SIZE);
+        ssize_t bytes_received = recv(conn, buffer, BUFFER_SIZE, 0);
+        if (bytes_received <= 0) {
+            break;
+        }
+
+        std::string message(buffer, bytes_received);
+        if (message.substr(0, 9) == "Dead Node") {
+            remove_dead_node(message);
+        } else {
+            size_t colon = message.find(':');
+            std::string peer_addr = addr + ":" + message.substr(colon + 1);
+
+            std::lock_guard<std::mutex> lock(peer_list_mutex);
+            peer_list.push_back(peer_addr);
+
+            std::string output = "Received Connection from " + peer_addr;
+            std::cout << output << std::endl;
+            write_output_to_file(output);
+
+            std::string peerListStr = list_to_string(peer_list);
+            send(conn, peerListStr.c_str(), peerListStr.size(), 0);
+        }
+    }
+    close(conn);
+}
+
+// Begin listening for incoming connections
+void begin(int sockfd) {
+    if (listen(sockfd, 5) < 0) {
+        std::cerr << "Listen Failed" << std::endl;
+        return;
+    }
+
+    std::cout << "Seed is Listening" << std::endl;
 
     while (true) {
-        new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
-        std::thread(handle_peer, new_socket).detach();
-    }
-}
+        struct sockaddr_in peer_addr;
+        socklen_t addr_len = sizeof(peer_addr);
+        int conn = accept(sockfd, (struct sockaddr*)&peer_addr, &addr_len);
+        if (conn < 0) {
+            std::cerr << "Accept Failed" << std::endl;
+            continue;
+        }
 
-void save_config(const std::vector<int>& ports) {
-    Json::Value root;
-    for (int port : ports) {
-        Json::Value seed;
-        seed["ip"] = "127.0.0.1";  // Assuming localhost
-        seed["port"] = port;
-        root["seeds"].append(seed);
+        std::string peer_ip = inet_ntoa(peer_addr.sin_addr);
+        std::thread(handle_peer, conn, peer_ip).detach();
     }
-
-    std::ofstream file("../config.json");
-    if (!file) {
-        std::cerr << "Error opening config file!" << std::endl;
-        return;
-    }
-    
-    file << root.toStyledString();
-    file.close();
-    std::cout << "Config file saved: ../config.json" << std::endl;
 }
 
 int main() {
-    int n;
-    std::cout << "Enter the number of seed nodes (default " << DEFAULT_SEEDS << "): ";
-    std::string input;
-    std::getline(std::cin, input);
-    
-    n = (input.empty()) ? DEFAULT_SEEDS : std::stoi(input);
-    
-    std::vector<int> seed_ports;
-    std::vector<std::thread> threads;
-    
-    for (int i = 0; i < n; i++) {
-        int port = BASE_PORT + i;
-        seed_ports.push_back(port);
-        threads.emplace_back(start_seed, port);
+    std::cout << "Enter Port No. for listening: ";
+    std::cin >> PORT;
+
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        std::cerr << "Socket Creation Error" << std::endl;
+        return 1;
     }
 
-    save_config(seed_ports);
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = inet_addr(MY_IP);
 
-    for (auto& thread : threads) {
-        thread.join();
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        std::cerr << "Socket Binding Error" << std::endl;
+        close(sockfd);
+        return 1;
     }
 
+    begin(sockfd);
+
+    close(sockfd);
     return 0;
 }
