@@ -143,7 +143,7 @@ void forward_gossip_message(const std::string &received_message)
     if (std::find(MessageList.begin(), MessageList.end(), hash) == MessageList.end())
     {
         MessageList.push_back(hash);
-        std::cout << received_message << "\n";
+        std::cout << "Received: " << received_message << "\n";
         write_output_to_file(received_message);
         for (const auto &peer : peers_connected)
         {
@@ -166,10 +166,10 @@ void forward_gossip_message(const std::string &received_message)
                 send(sock, received_message.c_str(), received_message.size(), 0);
                 close(sock);
             }
-            else
-            {
-                std::cerr << "Peer Down " << peer.address << ": " << strerror(errno) << "\n";
-            }
+            // else
+            // {
+            //     std::cerr << "Peer Down " << peer.address << ": " << strerror(errno) << "\n";
+            // }
         }
     }
 }
@@ -197,10 +197,10 @@ void handle_peer(int conn, sockaddr_in addr)
                     }
                 }
             }
-            else if (message.find("Liveness Request") != std::string::npos)
+            else if (message.find("Ping Request") != std::string::npos)
             {
-                std::string liveness_reply = "Liveness Reply:" + message.substr(message.find(':') + 1) + ":" + MY_IP;
-                send(conn, liveness_reply.c_str(), liveness_reply.size(), 0);
+                std::string ping_reply = "Ping Reply:" + message.substr(message.find(':') + 1) + ":" + MY_IP;
+                send(conn, ping_reply.c_str(), ping_reply.size(), 0);
             }
             else if (message.find("GOSSIP") != std::string::npos)
             {
@@ -277,7 +277,7 @@ void connect_peers(const std::vector<std::string> &complete_peer_list, const std
             if (bytes_received > 0)
             {
                 buffer[bytes_received] = '\0'; // Null-terminate the buffer
-                std::cout << buffer << "\n";
+                // std::cout << buffer << "\n";
             }
             else
             {
@@ -354,11 +354,6 @@ void connect_seeds()
             recv(sock, buffer, sizeof(buffer), 0);
             std::string message(buffer);
             auto complete_peer_list = union_peer_lists(message);
-            for (const auto &peer : complete_peer_list)
-            {
-                std::cout << peer << "\n";
-                write_output_to_file(peer);
-            }
             close(sock);
         }
         else
@@ -425,14 +420,14 @@ void report_dead(const std::string &peer)
     }
 }
 
-// Function for liveness testing
-void liveness_testing()
+// Function for pinging
+void pinging()
 {
     while (true)
     {
-        cout << "My IP is: " << MY_IP << "\n";
-        std::string liveness_request = "Liveness Request:" + timestamp() + ":" + MY_IP;
-        std::cout << liveness_request << "\n";
+        // cout << "My IP is: " << MY_IP << "\n";
+        std::string ping_request = "Ping Request:" + timestamp() + ":" + MY_IP;
+        std::cout << ping_request << "\n";
         for (auto &peer : peers_connected)
         {
             int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -451,7 +446,7 @@ void liveness_testing()
             inet_pton(AF_INET, ip.c_str(), &address.sin_addr);
             if (connect(sock, (sockaddr *)&address, sizeof(address)) == 0)
             {
-                send(sock, liveness_request.c_str(), liveness_request.size(), 0);
+                send(sock, ping_request.c_str(), ping_request.size(), 0);
                 char buffer[1024];
                 recv(sock, buffer, sizeof(buffer), 0);
                 std::cout << buffer << "\n";
@@ -533,7 +528,7 @@ void create_workers()
                     bind_socket();
                     begin();
                 } else if (x == 2) {
-                    liveness_testing();
+                    pinging();
                 } else if (x == 3) {
                     gossip();
                 }
