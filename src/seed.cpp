@@ -147,7 +147,11 @@ int main() {
     addr.sin_addr.s_addr = inet_addr(MY_IP);
 
     if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "Socket Binding Error" << std::endl;
+        if (errno == EADDRINUSE) {
+            std::cerr << "A seed is already present at that port" << std::endl;
+        } else {
+            std::cerr << "Socket Binding Error" << std::endl;
+        }
         close(sockfd);
         return 1;
     }
