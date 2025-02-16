@@ -31,6 +31,7 @@ std::unordered_set<std::string> peer_set_from_seed;
 std::vector<class Peer> peers_connected;
 std::vector<std::string> MessageList;
 std::vector<std::string> connect_seed_addr;
+std::unordered_set<int> reserved_ports;
 int sock;
 
 // Class for Peer objects
@@ -74,23 +75,41 @@ std::string timestamp()
 }
 
 // Function to read seed addresses from config file
-void read_addr_of_seeds()
-{
+// void read_addr_of_seeds()
+// {
+//     std::ifstream file("config.txt");
+//     if (file.is_open())
+//     {
+//         std::string line;
+//         while (std::getline(file, line))
+//         {
+//             seeds_addr.insert(line);
+//         }
+//         file.close();
+//     }
+//     else
+//     {
+//         std::cerr << "Read from config failed\n";
+//     }
+// }
+void read_addr_of_seeds() {
     std::ifstream file("config.txt");
-    if (file.is_open())
-    {
+    if (file.is_open()) {
         std::string line;
-        while (std::getline(file, line))
-        {
+        while (std::getline(file, line)) {
             seeds_addr.insert(line);
+            size_t colon_pos = line.find(':');
+            if (colon_pos != std::string::npos) {
+                int port = std::stoi(line.substr(colon_pos + 1));
+                reserved_ports.insert(port);
+            }
         }
         file.close();
-    }
-    else
-    {
+    } else {
         std::cerr << "Read from config failed\n";
     }
 }
+
 
 // Function to calculate the total number of available seeds
 int total_available_seeds()
@@ -129,12 +148,21 @@ void bind_socket()
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
+
     if (bind(sock, (sockaddr *)&address, sizeof(address)) < 0)
     {
-        std::cerr << "Socket Binding Error: " << strerror(errno) << "\n";
-        bind_socket();
+        if (errno == EADDRINUSE) {
+            std::cerr << "Error: Another peer is already active on port " << PORT << std::endl;
+        } else if (errno == EACCES) {
+            std::cerr << "Permission denied.\n";
+        } else {
+            std::cerr << "Socket Binding Error: " << strerror(errno) << std::endl;
+        }
+        close(sock);  // Close the socket before exiting
+        exit(EXIT_FAILURE);  // Terminate the program
     }
 }
+
 
 // Function to forward gossip messages
 void forward_gossip_message(const std::string &received_message)
@@ -175,7 +203,7 @@ void forward_gossip_message(const std::string &received_message)
 }
 
 // Function to handle peer connections
-void handle_peer(int conn, sockaddr_in addr)
+void handle_peer(int conn, sockaddr_in addr, int k)
 {
     char buffer[1024];
     while (true)
@@ -187,7 +215,7 @@ void handle_peer(int conn, sockaddr_in addr)
             std::string received_data = message;
             if (message.find("New Connect Request From") != std::string::npos)
             {
-                if (peers_connected.size() < 4)
+                if (peers_connected.size() < k)
                 {
                     send(conn, "New Connect Accepted", 20, 0);
                     std::string peer_address = std::string(inet_ntoa(addr.sin_addr)) + ":" + message.substr(message.find_last_of(':') + 1);
@@ -216,10 +244,11 @@ void handle_peer(int conn, sockaddr_in addr)
 }
 
 // Function to begin listening for connections
-void begin()
+void begin(int k)
 {
     listen(sock, 5);
     std::cout << "Peer is Listening\n";
+    write_output_to_file("Peer is Listening\n");
     while (true)
     {
         sockaddr_in addr;
@@ -230,7 +259,7 @@ void begin()
             std::cerr << "Accept Error: " << strerror(errno) << "\n";
             continue;
         }
-        std::thread(handle_peer, conn, addr).detach();
+        std::thread(handle_peer, conn, addr, k).detach();
     }
 }
 
@@ -253,11 +282,13 @@ void connect_peers(const std::vector<std::string> &complete_peer_list, const std
             std::cerr << "Invalid port in peer address: " << peer_addr << "\n";
             continue;
         }
+        
         cout << "The Port is: " << port_str << "\n";
+        write_output_to_file("The Port is: " + port_str);
         int port = std::stoi(port_str);
         if (port == PORT)
         {
-            cout << "Peer is trying to connect to itself\n";
+            // cout << "Peer is trying to connect to itself\n";
             continue;
         }
         sockaddr_in address;
@@ -428,6 +459,7 @@ void pinging()
         // cout << "My IP is: " << MY_IP << "\n";
         std::string ping_request = "Ping Request:" + timestamp() + ":" + MY_IP;
         std::cout << ping_request << "\n";
+        write_output_to_file(ping_request);
         for (auto &peer : peers_connected)
         {
             int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -526,7 +558,8 @@ void create_workers()
                 if (x == 1) {
                     create_socket();
                     bind_socket();
-                    begin();
+                    int k = 20; 
+                    begin(k);
                 } else if (x == 2) {
                     pinging();
                 } else if (x == 3) {
@@ -552,6 +585,12 @@ int main()
     std::cin >> PORT;
 
     read_addr_of_seeds();
+    if (reserved_ports.find(PORT) != reserved_ports.end()) {
+        std::cerr << "This port is reserved for seeds. Choose another port.\n";
+        write_output_to_file("This port is reserved for seeds. Choose another port.");
+        return 1; // Exit program
+    }
+
     int n = total_available_seeds();
     register_with_k_seeds();
 
